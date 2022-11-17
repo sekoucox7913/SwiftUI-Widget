@@ -1,0 +1,853 @@
+//
+//  SuperClockWidget.swift
+//  SuperClockWidget
+//
+//  Created by Sekou on 2021/8/26.
+//
+
+import WidgetKit
+import SwiftUI
+import Intents
+
+struct BTCData: Decodable{
+  var market_price_usd: CGFloat = 47162.9
+  var hash_rate: CGFloat = 120839429784
+  var trade_volume_btc: CGFloat = 0.0
+  var totalbc: Int64 = 1880330625000000
+  var n_blocks_total: Int64 = 698529
+  var n_tx: Int64 = 276837
+  var blocks_size: Int64 = 167465760
+}
+
+struct LightningData: Decodable{
+  var numberofnodes: Int64 = 29892
+  var numberofnodes30dchange: CGFloat = 7.5755
+//  var numberofnodeswithactivechannels: Int64 = 17913
+//  var numberofnodeswithactivechannels30dchange: CGFloat = 9.8975
+  var numberofchannels: Int64 = 80088
+  var numberofchannels30dchange: CGFloat = 5.7128
+  var networkcapacity: Int64 = 319863736857
+  var networkcapacity30dchange: CGFloat = 6.1475
+  var newnodes24h: Int64 = 50
+  var newchannels24h: Int64 = 451
+}
+
+struct spot: Decodable{
+  var base: String = "BTC"
+  var currency: String = "USD"
+  var amount: String = "0.0"
+}
+
+
+struct spotData: Decodable{
+  var data: spot = spot()
+}
+
+struct WidgetData: Decodable{
+  var currency: String = "USD"
+  var sat: Bool = true
+}
+
+
+let widgetBGColor = Color.init(red: 70.0 / 255.0, green: 70.0 / 255.0, blue: 70.0 / 255.0)
+
+class WebService{
+  static func fetchData(completion:@escaping (String?, Error?) -> Void){
+    URLSession.shared.dataTask(with: URLRequest(url: URL(string: "https://blockchain.info/q/getblockcount")!)) { (data, response, error) in
+      if (data != nil) {
+        completion(String(data: data!, encoding: .utf8), error)
+      }
+        
+    }.resume()
+  }
+  
+  static func fetchLightningData(completion:@escaping (String?, Error?) -> Void){
+    URLSession.shared.dataTask(with: URLRequest(url: URL(string: "https://1ml.com/statistics?json=true")!)) { (data, response, error) in
+      if (data != nil) {
+        print(data)
+        completion(String(data: data!, encoding: .utf8), error)
+      }
+    }.resume()
+  }
+  
+  static func fetchStatsData(completion:@escaping (String?, Error?) -> Void){
+    URLSession.shared.dataTask(with: URLRequest(url: URL(string: "https://api.blockchain.info/stats")!)) { (data, response, error) in
+      if (data != nil) {
+        completion(String(data: data!, encoding: .utf8), error)
+      }
+    }.resume()
+  }
+  
+  static func fetchPriceData(_ currency: String, completion:@escaping (String?, Error?) -> Void){
+      var urlRequest = URLRequest(url: URL(string: "https://api.coinbase.com/v2/prices/BTC-\(currency)/spot")!)
+      urlRequest.setValue("Bearer y2xxMwTMtlkelcMI", forHTTPHeaderField: "Authentication")
+      urlRequest.setValue("application/json;charset=uft-8", forHTTPHeaderField: "Content-Type")
+    
+      URLSession.shared.dataTask(with: urlRequest) { (data, response, error) in
+          completion(String(data: data!, encoding: .utf8), error)
+      }.resume()
+  }
+  
+  static func getSymbolForCurrencyCode(code: String) -> String?
+  {
+    if (code == "USD"){
+      return "$"
+    }
+    
+    let locale = NSLocale(localeIdentifier: code)
+    return locale.displayName(forKey: NSLocale.Key.currencySymbol, value: code)
+  }
+  
+  static func getSymbolForPercent(value: CGFloat) -> String{
+    if (value > 0){
+      return "+";
+    }
+    return "";
+  }
+}
+
+var lastupdateDate = Date()
+var currentBTCData = BTCData.init()
+var currentLightningData = LightningData.init()
+var currentCurrency = "USD"
+var currentCurrencySymbol = "US$"
+var currentSat = true
+
+var lightfontSize: CGFloat = UIDevice.current.userInterfaceIdiom == .phone ? UIScreen.main.bounds.size.width / 375.0 * 13.0 : UIScreen.main.bounds.size.width / 1024.0 * 15.0
+var smallfontSize: CGFloat = UIDevice.current.userInterfaceIdiom == .phone ? UIScreen.main.bounds.size.width / 375.0 * 16.0 : UIScreen.main.bounds.size.width / 1024.0 * 18.0
+var titlefontSize: CGFloat = UIDevice.current.userInterfaceIdiom == .phone ? UIScreen.main.bounds.size.width / 375.0 * 18.0 : UIScreen.main.bounds.size.width / 1024.0 * 22.0
+var mediumfontSize: CGFloat = UIDevice.current.userInterfaceIdiom == .phone ? UIScreen.main.bounds.size.width / 375.0 * 20.0 : UIScreen.main.bounds.size.width / 1024.0 * 24.0
+var bigfontSize: CGFloat = UIDevice.current.userInterfaceIdiom == .phone ? UIScreen.main.bounds.size.width / 375.0 * 30.0 : UIScreen.main.bounds.size.width / 1024.0 * 36.0
+
+struct Provider: TimelineProvider {
+    func placeholder(in context: Context) -> SimpleEntry {
+      SimpleEntry(date: Date(), btcData: BTCData.init(), lightningData: LightningData.init())
+    }
+
+    func getSnapshot(in context: Context, completion: @escaping (SimpleEntry) -> ()) {
+      let entry = SimpleEntry(date: Date(), btcData: BTCData.init(), lightningData: LightningData.init())
+      WidgetCenter.shared.reloadAllTimelines()
+      completion(entry)
+    }
+
+    func getTimeline(in context: Context, completion: @escaping (Timeline<Entry>) -> ()) {
+      let entryDate = Date()
+      
+      let userDefaults = UserDefaults.init(suiteName: "group.com.superclock.widget")
+      var currency = "USD"
+      var sat = true
+      if userDefaults != nil {
+        if let savedData = userDefaults!.value(forKey: "savedData") as? String {
+          let decoder = JSONDecoder()
+          let data = savedData.data(using: .utf8)
+          if let parsedData = try? decoder.decode(WidgetData.self, from: data!) {
+            currency = parsedData.currency
+            sat = parsedData.sat
+          }
+        }
+      }
+      
+      currentCurrency = currency
+      currentCurrencySymbol = WebService.getSymbolForCurrencyCode(code: currency)!
+      currentSat = sat
+      
+      WebService.fetchStatsData{ (data, error) in
+        let decoder = JSONDecoder()
+        let jsonData = data!.data(using: .utf8)
+        if let parsedData = try? decoder.decode(BTCData.self, from: jsonData!) {
+          currentBTCData = parsedData
+        }
+        WebService.fetchData{ (data, error) in
+          if let blockHeight = data {
+            lastupdateDate = entryDate
+            currentBTCData.n_blocks_total = Int64(blockHeight) ?? 0
+          }
+          
+          WebService.fetchPriceData(currency){ (data, error) in
+            let decoder = JSONDecoder()
+            let jsonData = data!.data(using: .utf8)
+            if let parsedData = try? decoder.decode(spotData.self, from: jsonData!) {
+              currentBTCData.market_price_usd = CGFloat((parsedData.data.amount as NSString).doubleValue)
+            }
+            WebService.fetchLightningData{ (data, error) in
+              let decoder = JSONDecoder()
+              let jsonData = data!.data(using: .utf8)
+              if let parsedData = try? decoder.decode(LightningData.self, from: jsonData!) {
+                currentLightningData = parsedData
+              }
+              let nextRefresh = Calendar.current.date(byAdding: .minute, value: 5, to: entryDate)!
+              let entry = SimpleEntry(date: nextRefresh, btcData: currentBTCData, lightningData: currentLightningData)
+              let timeline = Timeline(entries: [entry], policy: .after(nextRefresh))
+              completion(timeline)
+           }
+//            let nextRefresh = Calendar.current.date(byAdding: .minute, value: 5, to: entryDate)!
+//            let entry = SimpleEntry(date: nextRefresh, btcData: currentBTCData, lightningData: currentLightningData)
+//            let timeline = Timeline(entries: [entry], policy: .after(nextRefresh))
+//            completion(timeline)
+          }
+        }
+      }
+      
+//      WebService.fetchLightningData{ (data, error) in
+//        let decoder = JSONDecoder()
+//        let jsonData = data!.data(using: .utf8)
+//        if let parsedData = try? decoder.decode(LightningData.self, from: jsonData!) {
+//          currentLightningData = parsedData
+//          let nextRefresh = Calendar.current.date(byAdding: .minute, value: 5, to: entryDate)!
+//          let entry = SimpleEntry(date: nextRefresh, btcData: currentBTCData, lightningData: currentLightningData)
+//          let timeline = Timeline(entries: [entry], policy: .after(nextRefresh))
+//          completion(timeline)
+//        }
+//
+//      }
+    }
+    
+}
+
+struct SimpleEntry: TimelineEntry {
+    let date: Date
+    var btcData: BTCData
+    var lightningData: LightningData
+}
+
+struct SuperClockWidgetEntryView : View {
+  var entry: Provider.Entry
+  
+  var body: some View {
+    
+    GeometryReader{ metrics in
+      ZStack{
+        VStack{
+          
+          Spacer().frame(height: 5)
+          
+          HStack{
+            Image("bit_logo")
+              .resizable()
+              .scaledToFit()
+              .frame(width: 20, height: 20)
+              .padding([.leading, .top], 8)
+            
+            Text("Block Clock")
+              .bold()
+              .foregroundColor(.white)
+              .font(Font.system(size: titlefontSize))
+              .fixedSize(horizontal: false, vertical: true)
+              .padding([.top], 8)
+            Spacer()
+            
+          }
+          
+          Spacer().frame(height: 5)
+          
+          HStack{
+            VStack(alignment: .leading){
+              Group{
+                Spacer().frame(height: 10)
+                
+                Text("\(currentCurrencySymbol)\(entry.btcData.market_price_usd , specifier: "%.2f")")
+                  .bold()
+                  .foregroundColor(.white)
+                  .font(Font.system(size: smallfontSize))
+                  .fixedSize(horizontal: false, vertical: true)
+                
+                Spacer().frame(height: 3)
+                
+                Text("Vol: \(entry.btcData.trade_volume_btc, specifier: "%.2f")/hr")
+                  .bold()
+                  .foregroundColor(.white)
+                  .font(Font.system(size: smallfontSize))
+                  .fixedSize(horizontal: false, vertical: true)
+                
+                Spacer().frame(height: 3)
+              }
+              
+              Group{
+                Text("\(CGFloat(entry.btcData.totalbc) / 1000000000, specifier: "%.1f")m")
+                  .bold()
+                  .foregroundColor(.white)
+                  .font(Font.system(size: smallfontSize))
+                  .fixedSize(horizontal: false, vertical: true)
+                
+                Spacer().frame(height: 3)
+                
+                Text("Tx 24hr: \(entry.btcData.n_tx)")
+                  .bold()
+                  .foregroundColor(.white)
+                  .font(Font.system(size: smallfontSize))
+                  .fixedSize(horizontal: false, vertical: true)
+                
+                Spacer()
+              }
+            }
+            .frame(maxWidth: metrics.size.width * 0.55, alignment: .leading)
+            .padding(.leading, 15)
+            
+            VStack(alignment: .leading){
+              Spacer().frame(height: 10)
+              
+              Text("SATs: \(100000000/entry.btcData.market_price_usd, specifier: "%2.f")")
+                .bold()
+                .foregroundColor(.white)
+                .font(Font.system(size: smallfontSize))
+                .fixedSize(horizontal: false, vertical: true)
+              
+              Spacer().frame(height: 3)
+              
+              Text("Block: \(entry.btcData.n_blocks_total)")
+                .bold()
+                .foregroundColor(.white)
+                .font(Font.system(size: smallfontSize))
+                .fixedSize(horizontal: false, vertical: true)
+              
+              Spacer().frame(height: 3)
+              
+              Text("Hash: \(entry.btcData.hash_rate / 1000000000, specifier: "%.2f") EH/s")
+                .bold()
+                .foregroundColor(.white)
+                .font(Font.system(size: smallfontSize))
+                .fixedSize(horizontal: false, vertical: true)
+              
+              Spacer().frame(height: 3)
+              
+              let sbSize = String(format: "%.2f", CGFloat(entry.btcData.blocks_size) / CGFloat(100000000))
+              Text("Size: \(sbSize)MB")
+                .bold()
+                .foregroundColor(.white)
+                .font(Font.system(size: smallfontSize))
+                .fixedSize(horizontal: false, vertical: true)
+              
+              Spacer()
+              
+              //              Text("\(currentCurrency):\(lastupdateDate)")
+              //                .bold()
+              //                .foregroundColor(.white)
+              //                .font(Font.system(size: smallfontSize))
+              //                .fixedSize(horizontal: false, vertical: true)
+              //                .minimumScaleFactor(0.1)
+            }.frame(maxWidth: metrics.size.width * 0.45, alignment: .leading)
+          }
+          
+          Spacer()
+          
+        }
+        
+      }
+      .frame(maxWidth: .infinity, maxHeight: .infinity)
+      .background(widgetBGColor)
+      .overlay(
+        RoundedRectangle(cornerRadius: 20)
+          .stroke(Color.black, lineWidth: 3)
+      )
+    }
+  }
+}
+
+struct SuperClockBTCCurrencyWidgetEntryView : View {
+  var entry: Provider.Entry
+  
+  var body: some View {
+    ZStack{
+      
+      VStack{
+        HStack{
+          Image("bit_logo")
+            .resizable()
+            .scaledToFit()
+            .frame(width: 20, height: 20)
+            .padding([.leading, .top], 8)
+          Spacer()
+        }
+        Spacer()
+      }
+      
+      
+      VStack{
+        
+        Spacer()
+        
+        Text("BTC/\(currentCurrency)")
+          .bold()
+          .foregroundColor(.white)
+          .font(Font.system(size: mediumfontSize))
+        
+        
+        Text("\(currentCurrencySymbol)\(Int(entry.btcData.market_price_usd))")
+          .bold()
+          .foregroundColor(.white)
+          .font(Font.system(size: bigfontSize))
+          .minimumScaleFactor(0.1)
+        
+        Spacer()
+        
+        if (currentSat){
+          Text("SATs")
+            .bold()
+            .foregroundColor(.white)
+            .font(Font.system(size: mediumfontSize))
+          
+          
+          Text("\(100000000/entry.btcData.market_price_usd, specifier: "%2.f")")
+            .bold()
+            .foregroundColor(.white)
+            .font(Font.system(size: bigfontSize))
+
+          Spacer()
+        }
+      }
+    }
+    .frame(maxWidth: .infinity, maxHeight: .infinity)
+    .background(widgetBGColor)
+    .overlay(
+      RoundedRectangle(cornerRadius: 20)
+        .stroke(Color.black, lineWidth: 3)
+    )
+  }
+}
+
+struct SuperClockBTCHeightWidgetEntryView : View {
+  var entry: Provider.Entry
+  
+  var body: some View {
+    ZStack{
+      
+      VStack{
+        HStack{
+          Image("bit_logo")
+            .resizable()
+            .scaledToFit()
+            .frame(width: 20, height: 20)
+            .padding([.leading, .top], 8)
+          Spacer()
+        }
+        Spacer()
+      }
+      
+      
+      VStack{
+        
+        Spacer()
+        
+        Text("Block")
+          .bold()
+          .foregroundColor(.white)
+          .font(Font.system(size: mediumfontSize))
+
+        Spacer().frame(height: 15)
+        
+        Text("\(entry.btcData.n_blocks_total)")
+          .bold()
+          .foregroundColor(.white)
+          .font(Font.system(size: bigfontSize))
+        Spacer()
+      }
+    }
+    .frame(maxWidth: .infinity, maxHeight: .infinity)
+    .background(widgetBGColor)
+    .overlay(
+      RoundedRectangle(cornerRadius: 20)
+        .stroke(Color.black, lineWidth: 3)
+    )
+  }
+}
+
+struct SuperClockHashrateWidgetEntryView : View {
+  var entry: Provider.Entry
+  
+  var body: some View {
+    ZStack{
+      VStack{
+        HStack{
+          Image("bit_logo")
+            .resizable()
+            .scaledToFit()
+            .frame(width: 20, height: 20)
+            .padding([.leading, .top], 8)
+          Spacer()
+        }
+        Spacer()
+      }
+      
+      
+      VStack{
+        
+        Spacer()
+        
+        Text("Hashrate")
+          .bold()
+          .foregroundColor(.white)
+          .font(Font.system(size: mediumfontSize))
+        
+        Text("(EH/s)")
+          .bold()
+          .foregroundColor(.white)
+          .font(Font.system(size: smallfontSize))
+        
+        Text("\(entry.btcData.hash_rate / 1000000000, specifier: "%.2f")")
+          .bold()
+          .foregroundColor(.white)
+          .font(Font.system(size: bigfontSize))
+        Spacer()
+      }
+    }
+    .frame(maxWidth: .infinity, maxHeight: .infinity)
+    .background(widgetBGColor)
+    .overlay(
+      RoundedRectangle(cornerRadius: 20)
+        .stroke(Color.black, lineWidth: 3)
+    )
+  }
+}
+
+struct SuperClockTradeVolumnWidgetEntryView : View {
+  var entry: Provider.Entry
+
+  var body: some View {
+    ZStack{
+      VStack{
+        HStack{
+          Image("bit_logo")
+            .resizable()
+            .scaledToFit()
+            .frame(width: 20, height: 20)
+            .padding([.leading, .top], 8)
+          Spacer()
+        }
+        Spacer()
+      }
+      
+      
+      VStack{
+        
+        Spacer()
+        
+        Text("Trade Volumn")
+          .bold()
+          .foregroundColor(.white)
+          .font(Font.system(size: mediumfontSize))
+        
+        Text("(/hr)")
+          .bold()
+          .foregroundColor(.white)
+          .font(Font.system(size: smallfontSize))
+        
+        Text("\(entry.btcData.trade_volume_btc, specifier: "%.2f")")
+          .bold()
+          .foregroundColor(.white)
+          .font(Font.system(size: bigfontSize))
+          .fixedSize(horizontal: false, vertical: true)
+        Spacer()
+      }
+    }
+    .frame(maxWidth: .infinity, maxHeight: .infinity)
+    .background(widgetBGColor)
+    .overlay(
+      RoundedRectangle(cornerRadius: 20)
+        .stroke(Color.black, lineWidth: 3)
+    )
+  }
+}
+
+struct SuperClockLighteningWidgetEntryView : View {
+  var entry: Provider.Entry
+  
+  var body: some View {
+    GeometryReader{ metrics in
+      ZStack{
+        VStack{
+          Group{
+            Spacer().frame(height: 5)
+            
+            HStack{
+              Image("bit_logo")
+                .resizable()
+                .scaledToFit()
+                .frame(width: 20, height: 20)
+                .padding([.leading, .top], 8)
+              
+              Text("Lightning Network")
+                .bold()
+                .foregroundColor(.white)
+                .font(Font.system(size: titlefontSize))
+                .fixedSize(horizontal: false, vertical: true)
+                .padding([.top], 8)
+              Spacer()
+            }
+            
+            Spacer().frame(height: 20)
+          }
+          
+          Group{
+            HStack{
+              
+                Text("Nodes:")
+                  .bold()
+                  .foregroundColor(.white)
+                  .font(Font.system(size: lightfontSize))
+                  .fixedSize(horizontal: false, vertical: true)
+                  .padding([.leading], 8)
+                  .frame(width: metrics.size.width * 0.23, alignment: Alignment.leading)
+                
+                Text("\(entry.lightningData.numberofnodes)")
+                  .bold()
+                  .foregroundColor(.white)
+                  .font(Font.system(size: lightfontSize))
+                  .fixedSize(horizontal: false, vertical: true)
+                  .frame(width: metrics.size.width * 0.15, alignment: Alignment.trailing)
+                
+                Text("\(WebService.getSymbolForPercent(value: entry.lightningData.numberofnodes30dchange))\(entry.lightningData.numberofnodes30dchange, specifier: "%.2f")%")
+                  .bold()
+                  .foregroundColor(.white)
+                  .font(Font.system(size: lightfontSize))
+                  .fixedSize(horizontal: false, vertical: true)
+                  .frame(width: metrics.size.width * 0.17, alignment: Alignment.trailing)
+              
+                Text("New(24h):")
+                  .bold()
+                  .foregroundColor(.white)
+                  .font(Font.system(size: lightfontSize))
+                  .fixedSize(horizontal: false, vertical: true)
+                  .frame(width: metrics.size.width * 0.22, alignment: Alignment.leading)
+                
+                Text("\(entry.lightningData.newnodes24h)")
+                  .bold()
+                  .foregroundColor(.white)
+                  .font(Font.system(size: lightfontSize))
+                  .fixedSize(horizontal: false, vertical: true)
+                  .frame(width: metrics.size.width * 0.1, alignment: Alignment.trailing)
+              
+                Spacer()
+            }
+            
+            Spacer().frame(height: 15)
+            
+            HStack{
+              
+                Text("Channels:")
+                  .bold()
+                  .foregroundColor(.white)
+                  .font(Font.system(size: lightfontSize))
+                  .fixedSize(horizontal: false, vertical: true)
+                  .padding([.leading], 8)
+                  .frame(width: metrics.size.width * 0.23, alignment: Alignment.leading)
+                
+                Text("\(entry.lightningData.numberofchannels)")
+                  .bold()
+                  .foregroundColor(.white)
+                  .font(Font.system(size: lightfontSize))
+                  .fixedSize(horizontal: false, vertical: true)
+                  .frame(width: metrics.size.width * 0.15, alignment: Alignment.trailing)
+                
+                Text("\(WebService.getSymbolForPercent(value: entry.lightningData.numberofchannels30dchange))\(entry.lightningData.numberofchannels30dchange, specifier: "%.2f")%")
+                  .bold()
+                  .foregroundColor(.white)
+                  .font(Font.system(size: lightfontSize))
+                  .fixedSize(horizontal: false, vertical: true)
+                  .frame(width: metrics.size.width * 0.17, alignment: Alignment.trailing)
+              
+              
+                Text("New(24h):")
+                  .bold()
+                  .foregroundColor(.white)
+                  .font(Font.system(size: lightfontSize))
+                  .fixedSize(horizontal: false, vertical: true)
+                  .frame(width: metrics.size.width * 0.22, alignment: Alignment.leading)
+                
+                Text("\(entry.lightningData.newchannels24h)")
+                  .bold()
+                  .foregroundColor(.white)
+                  .font(Font.system(size: lightfontSize))
+                  .fixedSize(horizontal: false, vertical: true)
+                  .frame(width: metrics.size.width * 0.1, alignment: Alignment.trailing)
+                
+                Spacer()
+              
+              
+            }
+            
+            Spacer().frame(height: 15)
+          }
+          
+          Group{
+            /*
+            HStack{
+              Group{
+                Text("Active Channel Nodes:")
+                  .bold()
+                  .foregroundColor(.white)
+                  .font(Font.system(size: lightfontSize))
+                  .fixedSize(horizontal: true, vertical: true)
+                  .padding([.leading], 8)
+                  .frame(width: metrics.size.width * 0.5, alignment: Alignment.leading)
+                  
+                
+                Text("\(entry.lightningData.numberofnodeswithactivechannels)")
+                  .bold()
+                  .foregroundColor(.white)
+                  .font(Font.system(size: lightfontSize))
+                  .fixedSize(horizontal: false, vertical: true)
+                  .frame(width: metrics.size.width * 0.2, alignment: Alignment.trailing)
+                
+                Text("\(WebService.getSymbolForPercent(value: entry.lightningData.numberofnodeswithactivechannels30dchange))\(entry.lightningData.numberofnodeswithactivechannels30dchange, specifier: "%.2f")%")
+                  .bold()
+                  .foregroundColor(.white)
+                  .font(Font.system(size: lightfontSize))
+                  .fixedSize(horizontal: false, vertical: true)
+                  .frame(width: metrics.size.width * 0.22, alignment: Alignment.trailing)
+                
+                Spacer()
+              }
+            }
+            
+            Spacer().frame(height: 8)
+            */
+            HStack{
+              Group{
+                Text("BTC Capacity:")
+                  .bold()
+                  .foregroundColor(.white)
+                  .font(Font.system(size: lightfontSize))
+                  .fixedSize(horizontal: true, vertical: true)
+                  .padding([.leading], 8)
+                  .frame(width: metrics.size.width * 0.5, alignment: Alignment.leading)
+                  
+                
+                Text("\(CGFloat(entry.lightningData.networkcapacity)/CGFloat(100000000), specifier: "%0.2f")")
+                  .bold()
+                  .foregroundColor(.white)
+                  .font(Font.system(size: lightfontSize))
+                  .fixedSize(horizontal: false, vertical: true)
+                  .frame(width: metrics.size.width * 0.2, alignment: Alignment.trailing)
+                
+                Text("\(WebService.getSymbolForPercent(value: entry.lightningData.networkcapacity30dchange))\(entry.lightningData.networkcapacity30dchange, specifier: "%.2f")%")
+                  .bold()
+                  .foregroundColor(.white)
+                  .font(Font.system(size: lightfontSize))
+                  .fixedSize(horizontal: false, vertical: true)
+                  .frame(width: metrics.size.width * 0.22, alignment: Alignment.trailing)
+                
+                Spacer()
+              }
+            }
+          }
+          
+          Spacer()
+          
+        }
+        
+      }
+      .frame(maxWidth: .infinity, maxHeight: .infinity)
+      .background(widgetBGColor)
+      .overlay(
+        RoundedRectangle(cornerRadius: 20)
+          .stroke(Color.black, lineWidth: 3)
+      )
+    }
+  }
+}
+
+
+@main
+struct SuperClockWidgetBundle: WidgetBundle{
+  @WidgetBundleBuilder
+  var body: some Widget{
+    SuperClockWidget()
+    SuperClockLighteningWidget()
+    SuperClockBTCCurrencyWidget()
+    SuperClockBTCHeightWidget()
+    SuperClockHashrateWidget()
+//    SuperClockTradeVolumnWidget()
+    
+  }
+}
+
+struct SuperClockWidget: Widget {
+    let kind: String = "SuperClockWidget"
+
+    var body: some WidgetConfiguration {
+      StaticConfiguration(kind: kind, provider: Provider()) { entry in
+            SuperClockWidgetEntryView(entry: entry)
+        }
+        .supportedFamilies([.systemMedium])
+        .configurationDisplayName("Full Block Clock")
+        .description("")
+      
+    }
+}
+
+struct SuperClockBTCCurrencyWidget: Widget {
+    let kind: String = "SuperClockBTCCurrencyWidget"
+
+    var body: some WidgetConfiguration {
+      StaticConfiguration(kind: kind, provider: Provider()) { entry in
+          SuperClockBTCCurrencyWidgetEntryView(entry: entry)
+        }
+        .supportedFamilies([.systemSmall])
+        .configurationDisplayName("Bitcoin Price")
+        .description("")
+      
+        
+    }
+}
+
+struct SuperClockBTCHeightWidget: Widget {
+    let kind: String = "SuperClockBTCHeightWidget"
+
+    var body: some WidgetConfiguration {
+      StaticConfiguration(kind: kind, provider: Provider()) { entry in
+          SuperClockBTCHeightWidgetEntryView(entry: entry)
+        }
+        .supportedFamilies([.systemSmall])
+        .configurationDisplayName("Block Height")
+        .description("")
+      
+        
+    }
+}
+
+struct SuperClockHashrateWidget: Widget {
+    let kind: String = "SuperClockHashrateWidget"
+
+    var body: some WidgetConfiguration {
+      StaticConfiguration(kind: kind, provider: Provider()) { entry in
+          SuperClockHashrateWidgetEntryView(entry: entry)
+        }
+        .supportedFamilies([.systemSmall])
+        .configurationDisplayName("Hashrate")
+        .description("")
+    }
+}
+
+struct SuperClockTradeVolumnWidget: Widget {
+    let kind: String = "SuperClockTradeVolumnWidget"
+
+    var body: some WidgetConfiguration {
+      StaticConfiguration(kind: kind, provider: Provider()) { entry in
+          SuperClockTradeVolumnWidgetEntryView(entry: entry)
+        }
+        .supportedFamilies([.systemSmall])
+        .configurationDisplayName("Trade Volumn")
+        .description("")
+    }
+}
+
+
+struct SuperClockLighteningWidget: Widget {
+    let kind: String = "SuperClockLightningWidget"
+
+    var body: some WidgetConfiguration {
+      StaticConfiguration(kind: kind, provider: Provider()) { entry in
+          SuperClockLighteningWidgetEntryView(entry: entry)
+        }
+        .supportedFamilies([.systemMedium])
+        .configurationDisplayName("Lightning Network")
+        .description("")
+    }
+}
+
+struct SuperClockWidget_Previews: PreviewProvider {
+    static var previews: some View {
+      SuperClockWidgetEntryView(entry: SimpleEntry(date: Date(), btcData: BTCData.init(), lightningData: LightningData.init()))
+            .previewContext(WidgetPreviewContext(family: .systemSmall))
+    }
+}
